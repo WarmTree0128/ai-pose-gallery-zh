@@ -1212,7 +1212,7 @@ async function generateWithQwen21Gateway(params: {
 }
 
 
-async function generateWithComfyUi(params: {
+export async function generateWithComfyUi(params: {
   recipe: RecipeState
   prompt: string
   config: ApiConfig
