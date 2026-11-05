@@ -1110,6 +1110,108 @@ export interface GenerationProgress {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+
+async function generateWithQwen21Gateway(params: {
+  recipe: RecipeState
+  prompt: string
+  baseUrl: string
+  apiKey: string
+  onProgress?: (p: GenerationProgress) => void
+}): Promise<{ imageUrl: string; modelUsed: string; providerUsed: ImageProviderId }> {
+  const { recipe, prompt, baseUrl, apiKey } = params
+  const report = params.onProgress ?? (() => {})
+
+  report({ stage: 'check', message: '正在连接 Qwen Image 2.1 Gateway…' })
+  await testComfyConnection(baseUrl, apiKey)
+
+  report({ stage: 'upload', message: '正在准备参考图片…' })
+  const stitched = await stitchRecipeCanvas(recipe)
+  const form = new FormData()
+  form.append('image', dataUrlToBlob(stitched), 'references.jpg')
+  form.append('prompt', prompt)
+
+  report({ stage: 'queue', message: '正在提交 Qwen Image 2.1 任务…' })
+  const submitRes = await comfyFetch(
+    baseUrl,
+    '/edit',
+    { method: 'POST', body: form },
+    apiKey,
+    60000
+  )
+
+  const submit = await readJsonSafe(submitRes)
+  if (!submitRes.ok || !submit.job_id) {
+    throw new Error(
+      `[ComfyUI] 提交任务失败 (HTTP ${submitRes.status})：${JSON.stringify(submit).slice(0, 300)}`
+    )
+  }
+
+  const jobId = String(submit.job_id)
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < 600000) {
+    await sleep(2000)
+
+    const statusRes = await comfyFetch(
+      baseUrl,
+      `/jobs/${encodeURIComponent(jobId)}`,
+      {},
+      apiKey,
+      15000
+    )
+
+    if (!statusRes.ok) {
+      throw new Error(`[ComfyUI] 查询任务失败 (HTTP ${statusRes.status})`)
+    }
+
+    const status = await readJsonSafe(statusRes)
+    const state = String(status.state || '').toLowerCase()
+
+    if (state === 'completed') {
+      report({ stage: 'download', message: '正在获取生成图片…', percent: 100 })
+
+      const imageRes = await comfyFetch(
+        baseUrl,
+        `/jobs/${encodeURIComponent(jobId)}/image`,
+        {},
+        apiKey,
+        60000
+      )
+
+      if (!imageRes.ok) {
+        throw new Error(`[ComfyUI] 下载图片失败 (HTTP ${imageRes.status})`)
+      }
+
+      const blob = await imageRes.blob()
+      if (!blob.size || !blob.type.startsWith('image/')) {
+        throw new Error('[ComfyUI] Gateway 返回的不是有效图片')
+      }
+
+      return {
+        imageUrl: await blobToDataUrl(blob),
+        modelUsed: 'Qwen Image 2.1 (Local Gateway)',
+        providerUsed: 'comfyui',
+      }
+    }
+
+    if (state === 'error' || state === 'failed') {
+      throw new Error(
+        `[ComfyUI] 生成失败：${JSON.stringify(status).slice(0, 500)}`
+      )
+    }
+
+    report({
+      stage: state === 'queued' ? 'queue' : 'running',
+      message: state === 'queued'
+        ? '等待 ComfyUI 执行…'
+        : 'Qwen Image 2.1 正在生成图片…',
+    })
+  }
+
+  throw new Error('[ComfyUI] 生成超时（超过 10 分钟）')
+}
+
+
 async function generateWithComfyUi(params: {
   recipe: RecipeState
   prompt: string
