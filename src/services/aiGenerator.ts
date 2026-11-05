@@ -1497,9 +1497,17 @@ export async function generateCharacterImage(params: {
 
   const baseUrl = (pCfg.baseUrl.trim() || PROVIDER_META[provider].defaultBaseUrl).replace(/\/+$/, '')
 
-  if (provider === 'comfyui') {
-    return generateWithComfyUi({ recipe, prompt, config, baseUrl, apiKey, onProgress })
-  }
+
+if (provider === 'comfyui') {
+  return generateWithQwen21Gateway({
+    recipe,
+    prompt,
+    baseUrl,
+    apiKey,
+    onProgress,
+  })
+}
+
 
   // 判断当前请求是否需要转换为本地 Base64：
   // 1) 用户显式选择了 base64 模式
